@@ -1,9 +1,16 @@
-import requests
-from bs4 import BeautifulSoup
+import os
+import sys
+import time
 import urllib3
 import schedule
-import time
+import io
 from datetime import datetime
+from dotenv import load_dotenv
+from pymongo import MongoClient
+
+# Scrapers
+import requests
+from bs4 import BeautifulSoup
 from selenium import webdriver
 from selenium.webdriver.chrome.service import Service
 from selenium.webdriver.chrome.options import Options
@@ -11,16 +18,30 @@ from webdriver_manager.chrome import ChromeDriverManager
 from selenium.webdriver.common.by import By
 from selenium.webdriver.support.ui import WebDriverWait
 from selenium.webdriver.support import expected_conditions as EC
-from selenium.webdriver.common.action_chains import ActionChains
 
-# Configuración inicial
+# Configuración de entorno y consola
+os.environ['PYTHONUNBUFFERED'] = "1"
+sys.stdout.reconfigure(encoding='utf-8')
+load_dotenv()
+
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 HEADERS = {
     'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
 }
 
+def get_mongo_client():
+    user = os.getenv("MONGO_USER")
+    password = os.getenv("MONGO_PASS")
+    cluster = os.getenv("MONGO_CLUSTER")
+    if not all([user, password, cluster]):
+        print("[DB] ERROR: Faltan credenciales en .env", flush=True)
+        return None
+    uri = f"mongodb+srv://{user}:{password}@{cluster}/?retryWrites=true&w=majority"
+    client = MongoClient(uri, serverSelectionTimeoutMS=5000)
+    return client["Monitor_P2P_Bolivia"]["FIAT_PRICE"]
+
 def obtener_datos_bcb():
-    """Extrae el Dólar Referencial del Banco Central de Bolivia."""
+    print("[1/3] Consultando BCB...", flush=True)
     url = "https://www.bcb.gob.bo/"
     try:
         response = requests.get(url, headers=HEADERS, verify=False, timeout=15)
@@ -30,37 +51,43 @@ def obtener_datos_bcb():
             titulo = card.find('p', class_='bcb-kpi2-name')
             if titulo and "Valor referencial" in titulo.text:
                 vals = card.find_all('div', class_='bcb-val')
-                compra = vals[0].get_text(strip=True)
-                venta = vals[1].get_text(strip=True)
-                return f"BCB Referencial  | Compra: {compra} | Venta: {venta}"
+                res = {
+                    "compra": float(vals[0].get_text(strip=True).replace(',', '.')),
+                    "venta": float(vals[1].get_text(strip=True).replace(',', '.'))
+                }
+                print(f"      OK -> BCB: {res}", flush=True)
+                return res
     except Exception as e:
-        return f"Error en BCB: {e}"
-    return "BCB: No se encontró el dato."
+        print(f"      [!] Error BCB: {e}", flush=True)
+    return None
 
 def obtener_datos_bisa():
-    """Extrae los valores de USDTs del Banco Bisa."""
+    print("[2/3] Consultando BISA...", flush=True)
     url = "https://www.bisa.com/home"
     try:
         response = requests.get(url, headers=HEADERS, verify=False, timeout=15)
         soup = BeautifulSoup(response.text, 'html.parser')
         spans = soup.find_all('span')
-        compra, venta = "N/A", "N/A"
+        datos = {"compra": None, "venta": None}
         for s in spans:
             texto = s.get_text(strip=True)
             if "USDTs Compra" in texto:
-                compra = texto.replace("USDTs Compra", "").strip()
+                datos["compra"] = float(texto.replace("USDTs Compra", "").strip().replace(',', '.'))
             elif "USDTs Venta" in texto:
-                venta = texto.replace("USDTs Venta", "").strip()
-        return f"BISA USDTs       | Compra: {compra} | Venta: {venta}"
+                datos["venta"] = float(texto.replace("USDTs Venta", "").strip().replace(',', '.'))
+        print(f"      OK -> BISA: {datos}", flush=True)
+        return datos
     except Exception as e:
-        return f"Error en BISA: {e}"
+        print(f"      [!] Error BISA: {e}", flush=True)
+    return None
 
 def obtener_datos_bcp():
-    """Extrae USDT Venta del BCP manejando pop-ups y carga dinámica."""
+    print("[3/3] Consultando BCP (Selenium)...", flush=True)
     url = "https://www.bcp.com.bo/"
     chrome_options = Options()
-    chrome_options.add_argument("--headless") 
-    chrome_options.add_argument("--window-size=1920,1080") # Simular pantalla grande
+    chrome_options.add_argument("--headless")
+    chrome_options.add_argument("--window-size=1920,1080")
+    chrome_options.add_argument("--disable-gpu")
     chrome_options.add_argument(f'user-agent={HEADERS["User-Agent"]}')
 
     driver = None
@@ -68,56 +95,66 @@ def obtener_datos_bcp():
         service = Service(ChromeDriverManager().install())
         driver = webdriver.Chrome(service=service, options=chrome_options)
         driver.get(url)
-        wait = WebDriverWait(driver, 20)
+        wait = WebDriverWait(driver, 25)
 
-        # 1. Intentar cerrar el pop-up si aparece
+        # Intento de cerrar popup
         try:
-            # Buscamos el botón de cerrar (la 'x')
             btn_cerrar = wait.until(EC.element_to_be_clickable((By.CLASS_NAME, "cerrarBtn1")))
             btn_cerrar.click()
-            time.sleep(1) # Pausa breve tras cerrar
         except:
-            # Si no aparece el pop-up, continuamos
             pass
 
-        # 2. Esperar a que la marquesina tenga contenido real
-        # A veces el div existe pero está vacío mientras carga el script
         wait.until(lambda d: "USDT Venta" in d.find_element(By.CLASS_NAME, "marquee-content").text)
-
-        # 3. Extraer el contenido usando JavaScript (más robusto)
         contenido = driver.execute_script("return document.querySelector('.marquee-content').innerText;")
         
-        # Procesar el texto obtenido
-        # El texto suele venir como: "Dólar Compra: 6.85 | Dólar Venta: 6.97 | USDT Venta: 9.45"
         partes = contenido.split('|')
         for parte in partes:
             if "USDT Venta" in parte:
-                valor = parte.replace("USDT Venta:", "").strip()
-                return f"BCP USDT         | Venta: {valor}"
-        
-        return "BCP: Texto USDT no encontrado en el bloque."
-
+                valor = float(parte.replace("USDT Venta:", "").strip().replace(',', '.'))
+                print(f"      OK -> BCP: {valor}", flush=True)
+                return {"venta": valor}
     except Exception as e:
-        return f"Error en BCP (Selenium): {str(e)[:100]}" # Error resumido
+        print(f"      [!] Error BCP: {str(e)[:50]}...", flush=True)
     finally:
-        if driver:
-            driver.quit()
+        if driver: driver.quit()
+    return None
 
 def tarea_principal():
-    """Función que orquesta la ejecución y muestra los resultados."""
-    ahora = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-    print(f"\n--- Actualización: {ahora} ---")
+    ahora = datetime.now()
+    print(f"\n--- INICIO DE CICLO: {ahora.strftime('%H:%M:%S')} ---", flush=True)
     
-    # Ejecución de los tres scrapeos
-    print(obtener_datos_bcb())
-    print(obtener_datos_bisa())
-    print(obtener_datos_bcp())
+    # Ejecución de los Scrapers
+    res_bcb = obtener_datos_bcb()
+    res_bisa = obtener_datos_bisa()
+    res_bcp = obtener_datos_bcp()
+
+    # Preparar el documento
+    documento = {
+        "timestamp": ahora,
+        "fuentes": {
+            "BCB": res_bcb,
+            "BISA": res_bisa,
+            "BCP": res_bcp
+        }
+    }
+
+    # Guardar en MongoDB
+    print("[DB] Conectando y guardando...", flush=True)
+    try:
+        coleccion = get_mongo_client()
+        if coleccion is not None:
+            ins_res = coleccion.insert_one(documento)
+            print(f"[DB] EXITO: Insertado ID {ins_res.inserted_id}", flush=True)
+    except Exception as e:
+        print(f"[DB] ERROR: {e}", flush=True)
+
+    print(f"--- FIN DE CICLO: {datetime.now().strftime('%H:%M:%S')} ---\n", flush=True)
 
 # --- PROGRAMACIÓN ---
 schedule.every(15).minutes.do(tarea_principal)
 
 if __name__ == "__main__":
-    print("Iniciando monitor de divisas (BCB, BISA, BCP)...")
+    print("SISTEMA: Monitor de Divisas Bolivia Activo", flush=True)
     tarea_principal()
     
     while True:
