@@ -104,15 +104,26 @@ def obtener_datos_bcp():
         except:
             pass
 
-        wait.until(lambda d: "USDT Venta" in d.find_element(By.CLASS_NAME, "marquee-content").text)
+        # Esperamos a que el contenedor de la marquesina tenga datos
+        wait.until(lambda d: "USDT" in d.find_element(By.CLASS_NAME, "marquee-content").text)
         contenido = driver.execute_script("return document.querySelector('.marquee-content').innerText;")
         
+        datos = {"compra": None, "venta": None}
         partes = contenido.split('|')
+        
         for parte in partes:
-            if "USDT Venta" in parte:
-                valor = float(parte.replace("USDT Venta:", "").strip().replace(',', '.'))
-                print(f"      OK -> BCP: {valor}", flush=True)
-                return {"venta": valor}
+            # Limpieza genérica del texto y conversión a float
+            if "USDT Compra" in parte:
+                valor = parte.replace("USDT Compra:", "").strip().replace(',', '.')
+                datos["compra"] = float(valor)
+            elif "USDT Venta" in parte:
+                valor = parte.replace("USDT Venta:", "").strip().replace(',', '.')
+                datos["venta"] = float(valor)
+
+        if datos["compra"] and datos["venta"]:
+            print(f"      OK -> BCP: Compra {datos['compra']} | Venta {datos['venta']}", flush=True)
+            return datos
+            
     except Exception as e:
         print(f"      [!] Error BCP: {str(e)[:50]}...", flush=True)
     finally:
