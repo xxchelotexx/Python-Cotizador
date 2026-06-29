@@ -40,23 +40,54 @@ def get_mongo_client():
     client = MongoClient(uri, serverSelectionTimeoutMS=5000)
     return client["Monitor_P2P_Bolivia"]["FIAT_PRICE"]
 
+# def obtener_datos_bcb():
+#     print("[1/3] Consultando BCB...", flush=True)
+#     url = "https://www.bcb.gob.bo/"
+#     try:
+#         response = requests.get(url, headers=HEADERS, verify=False, timeout=15)
+#         soup = BeautifulSoup(response.text, 'html.parser')
+#         cards = soup.find_all('article', class_='bcb-kpi2-card')
+#         for card in cards:
+#             titulo = card.find('p', class_='bcb-kpi2-name')
+#             if titulo and "Valor referencial" in titulo.text:
+#                 vals = card.find_all('div', class_='bcb-val')
+#                 res = {
+#                     "compra": float(vals[0].get_text(strip=True).replace(',', '.')),
+#                     "venta": float(vals[1].get_text(strip=True).replace(',', '.'))
+#                 }
+#                 print(f"      OK -> BCB: {res}", flush=True)
+#                 return res
+#     except Exception as e:
+#         print(f"      [!] Error BCB: {e}", flush=True)
+#     return None
 def obtener_datos_bcb():
     print("[1/3] Consultando BCB...", flush=True)
     url = "https://www.bcb.gob.bo/"
     try:
+        # Nota: Idealmente evita verify=False en producción a menos que sea estrictamente necesario
         response = requests.get(url, headers=HEADERS, verify=False, timeout=15)
         soup = BeautifulSoup(response.text, 'html.parser')
-        cards = soup.find_all('article', class_='bcb-kpi2-card')
-        for card in cards:
-            titulo = card.find('p', class_='bcb-kpi2-name')
-            if titulo and "Valor referencial" in titulo.text:
-                vals = card.find_all('div', class_='bcb-val')
+        
+        # 1. Buscamos la tarjeta con la clase específica del tipo de cambio oficial
+        card = soup.find('article', class_='bcb-kpi2-card is-tc-oficial')
+        
+        if card:
+            # 2. Buscamos el span que contiene el número (ej: "9,73")
+            num_span = card.find('span', class_='bcb-tco-num')
+            
+            if num_span:
+                # 3. Limpiamos el texto y reemplazamos la coma por punto para el float
+                valor_texto = num_span.get_text(strip=True).replace(',', '.')
+                valor_float = float(valor_texto)
+                
                 res = {
-                    "compra": float(vals[0].get_text(strip=True).replace(',', '.')),
-                    "venta": float(vals[1].get_text(strip=True).replace(',', '.'))
+                    "venta": valor_float,
+                    "compra": 0.0
                 }
                 print(f"      OK -> BCB: {res}", flush=True)
                 return res
+                
+        print("      [!] No se encontró la estructura del tipo de cambio en el HTML", flush=True)
     except Exception as e:
         print(f"      [!] Error BCB: {e}", flush=True)
     return None
