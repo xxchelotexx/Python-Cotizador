@@ -4,6 +4,7 @@ import time
 import urllib3
 import schedule
 import io
+import re
 from datetime import datetime
 from dotenv import load_dotenv
 from pymongo import MongoClient
@@ -60,37 +61,92 @@ def get_mongo_client():
 #     except Exception as e:
 #         print(f"      [!] Error BCB: {e}", flush=True)
 #     return None
-def obtener_datos_bcb():
-    print("[1/3] Consultando BCB...", flush=True)
-    url = "https://www.bcb.gob.bo/"
-    try:
-        # Nota: Idealmente evita verify=False en producción a menos que sea estrictamente necesario
-        response = requests.get(url, headers=HEADERS, verify=False, timeout=15)
-        soup = BeautifulSoup(response.text, 'html.parser')
+# def obtener_datos_bcb():
+#     print("[1/3] Consultando BCB...", flush=True)
+#     url = "https://www.bcb.gob.bo/"
+#     try:
+#         # Nota: Idealmente evita verify=False en producción a menos que sea estrictamente necesario
+#         response = requests.get(url, headers=HEADERS, verify=False, timeout=15)
+#         soup = BeautifulSoup(response.text, 'html.parser')
         
-        # 1. Buscamos la tarjeta con la clase específica del tipo de cambio oficial
-        card = soup.find('article', class_='bcb-kpi2-card is-tc-oficial')
+#         # 1. Buscamos la tarjeta con la clase específica del tipo de cambio oficial
+#         card = soup.find('article', class_='bcb-kpi2-card is-tc-oficial')
         
-        if card:
-            # 2. Buscamos el span que contiene el número (ej: "9,73")
-            num_span = card.find('span', class_='bcb-tco-num')
+#         if card:
+#             # 2. Buscamos el span que contiene el número (ej: "9,73")
+#             num_span = card.find('span', class_='bcb-tco-num')
             
-            if num_span:
-                # 3. Limpiamos el texto y reemplazamos la coma por punto para el float
-                valor_texto = num_span.get_text(strip=True).replace(',', '.')
-                valor_float = float(valor_texto)
+#             if num_span:
+#                 # 3. Limpiamos el texto y reemplazamos la coma por punto para el float
+#                 valor_texto = num_span.get_text(strip=True).replace(',', '.')
+#                 valor_float = float(valor_texto)
                 
-                res = {
-                    "venta": valor_float,
-                    "compra": 0.0
-                }
-                print(f"      OK -> BCB: {res}", flush=True)
-                return res
+#                 res = {
+#                     "venta": valor_float+0.1,
+#                     "compra": valor_float-0.1
+#                 }
+#                 print(f"      OK -> BCB: {res}", flush=True)
+#                 return res
                 
-        print("      [!] No se encontró la estructura del tipo de cambio en el HTML", flush=True)
-    except Exception as e:
-        print(f"      [!] Error BCB: {e}", flush=True)
-    return None
+#         print("      [!] No se encontró la estructura del tipo de cambio en el HTML", flush=True)
+#     except Exception as e:
+#         print(f"      [!] Error BCB: {e}", flush=True)
+#     return None
+def obtener_datos_bcb():
+  print("[1/3] Consultando BCB...", flush=True)
+  url = "https://www.bcb.gob.bo/"
+
+  # Desactivar advertencias de SSL si usas verify=False
+  requests.packages.urllib3.disable_warnings()
+
+  headers = {
+      "User-Agent": (
+          "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML,"
+          " like Gecko) Chrome/120.0.0.0 Safari/537.36"
+      )
+  }
+
+  try:
+    response = requests.get(url, headers=headers, verify=False, timeout=15)
+    soup = BeautifulSoup(response.text, "html.parser")
+
+    # 1. Búsqueda directa del span con la clase (usando regex para coincidencia parcial)
+    num_span = soup.find("span", class_=re.compile(r"\bbcb-tco-num\b"))
+
+    # 2. Si no lo encuentra por clase, buscar cualquier span/elemento dentro de la tarjeta
+    if not num_span:
+      card = soup.find(class_=re.compile(r"is-tc-oficial"))
+      if card:
+        num_span = card.find("span", class_=re.compile(r"num"))
+
+    if num_span:
+      texto_limpio = num_span.get_text(strip=True)
+
+      # Extraer solo el número con decimales usando Expresión Regular (soporta "6,96" o "9.73")
+      match = re.search(r"\d+[\.,]\d+", texto_limpio)
+
+      if match:
+        valor_texto = match.group(0).replace(",", ".")
+        valor_float = float(valor_texto)
+
+        res = {
+            "venta": round(valor_float + 0.1, 2),
+            "compra": round(valor_float - 0.1, 2),
+            "oficial": valor_float,
+        }
+        print(f"      OK -> BCB: {res}", flush=True)
+        return res
+
+    print(
+        "      [!] No se encontró el elemento con clase 'bcb-tco-num' en el"
+        " HTML.",
+        flush=True,
+    )
+
+  except Exception as e:
+    print(f"      [!] Error BCB: {e}", flush=True)
+
+  return None
 
 def obtener_datos_bisa():
     print("[2/3] Consultando BISA...", flush=True)
