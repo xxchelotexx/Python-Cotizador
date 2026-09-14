@@ -3,25 +3,18 @@ import sys
 import time
 import urllib3
 import schedule
-import io
 import re
 from datetime import datetime
 from dotenv import load_dotenv
 from pymongo import MongoClient
-
-# Scrapers
-import requests
 from bs4 import BeautifulSoup
-from selenium import webdriver
-from selenium.webdriver.chrome.service import Service
-from selenium.webdriver.chrome.options import Options
-from webdriver_manager.chrome import ChromeDriverManager
-from selenium.webdriver.common.by import By
-from selenium.webdriver.support.ui import WebDriverWait
-from selenium.webdriver.support import expected_conditions as EC
+import requests
+from curl_cffi import requests as curl_requests
 
 # Configuración de entorno y consola
 os.environ['PYTHONUNBUFFERED'] = "1"
+if sys.platform == "win32":
+    os.system("chcp 65001 > nul")
 sys.stdout.reconfigure(encoding='utf-8')
 load_dotenv()
 
@@ -41,115 +34,48 @@ def get_mongo_client():
     client = MongoClient(uri, serverSelectionTimeoutMS=5000)
     return client["Monitor_P2P_Bolivia"]["FIAT_PRICE"]
 
-# def obtener_datos_bcb():
-#     print("[1/3] Consultando BCB...", flush=True)
-#     url = "https://www.bcb.gob.bo/"
-#     try:
-#         response = requests.get(url, headers=HEADERS, verify=False, timeout=15)
-#         soup = BeautifulSoup(response.text, 'html.parser')
-#         cards = soup.find_all('article', class_='bcb-kpi2-card')
-#         for card in cards:
-#             titulo = card.find('p', class_='bcb-kpi2-name')
-#             if titulo and "Valor referencial" in titulo.text:
-#                 vals = card.find_all('div', class_='bcb-val')
-#                 res = {
-#                     "compra": float(vals[0].get_text(strip=True).replace(',', '.')),
-#                     "venta": float(vals[1].get_text(strip=True).replace(',', '.'))
-#                 }
-#                 print(f"      OK -> BCB: {res}", flush=True)
-#                 return res
-#     except Exception as e:
-#         print(f"      [!] Error BCB: {e}", flush=True)
-#     return None
-# def obtener_datos_bcb():
-#     print("[1/3] Consultando BCB...", flush=True)
-#     url = "https://www.bcb.gob.bo/"
-#     try:
-#         # Nota: Idealmente evita verify=False en producción a menos que sea estrictamente necesario
-#         response = requests.get(url, headers=HEADERS, verify=False, timeout=15)
-#         soup = BeautifulSoup(response.text, 'html.parser')
-        
-#         # 1. Buscamos la tarjeta con la clase específica del tipo de cambio oficial
-#         card = soup.find('article', class_='bcb-kpi2-card is-tc-oficial')
-        
-#         if card:
-#             # 2. Buscamos el span que contiene el número (ej: "9,73")
-#             num_span = card.find('span', class_='bcb-tco-num')
-            
-#             if num_span:
-#                 # 3. Limpiamos el texto y reemplazamos la coma por punto para el float
-#                 valor_texto = num_span.get_text(strip=True).replace(',', '.')
-#                 valor_float = float(valor_texto)
-                
-#                 res = {
-#                     "venta": valor_float+0.1,
-#                     "compra": valor_float-0.1
-#                 }
-#                 print(f"      OK -> BCB: {res}", flush=True)
-#                 return res
-                
-#         print("      [!] No se encontró la estructura del tipo de cambio en el HTML", flush=True)
-#     except Exception as e:
-#         print(f"      [!] Error BCB: {e}", flush=True)
-#     return None
 def obtener_datos_bcb():
-  print("[1/3] Consultando BCB...", flush=True)
-  url = "https://www.bcb.gob.bo/"
+    print("[1/5] Consultando BCB...", flush=True)
+    url = "https://www.bcb.gob.bo/"
+    headers = {
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+    }
 
-  # Desactivar advertencias de SSL si usas verify=False
-  requests.packages.urllib3.disable_warnings()
+    try:
+        response = requests.get(url, headers=headers, verify=False, timeout=15)
+        soup = BeautifulSoup(response.text, "html.parser")
 
-  headers = {
-      "User-Agent": (
-          "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML,"
-          " like Gecko) Chrome/120.0.0.0 Safari/537.36"
-      )
-  }
+        num_span = soup.find("span", class_=re.compile(r"\bbcb-tco-num\b"))
+        if not num_span:
+            card = soup.find(class_=re.compile(r"is-tc-oficial"))
+            if card:
+                num_span = card.find("span", class_=re.compile(r"num"))
 
-  try:
-    response = requests.get(url, headers=headers, verify=False, timeout=15)
-    soup = BeautifulSoup(response.text, "html.parser")
+        if num_span:
+            texto_limpio = num_span.get_text(strip=True)
+            match = re.search(r"\d+[\.,]\d+", texto_limpio)
 
-    # 1. Búsqueda directa del span con la clase (usando regex para coincidencia parcial)
-    num_span = soup.find("span", class_=re.compile(r"\bbcb-tco-num\b"))
+            if match:
+                valor_texto = match.group(0).replace(",", ".")
+                valor_float = float(valor_texto)
 
-    # 2. Si no lo encuentra por clase, buscar cualquier span/elemento dentro de la tarjeta
-    if not num_span:
-      card = soup.find(class_=re.compile(r"is-tc-oficial"))
-      if card:
-        num_span = card.find("span", class_=re.compile(r"num"))
+                res = {
+                    "venta": round(valor_float + 0.1, 2),
+                    "compra": round(valor_float - 0.1, 2),
+                    "oficial": valor_float,
+                }
+                print(f"      OK -> BCB: {res}", flush=True)
+                return res
 
-    if num_span:
-      texto_limpio = num_span.get_text(strip=True)
+        print("      [!] No se encontró el elemento con clase 'bcb-tco-num' en el HTML.", flush=True)
 
-      # Extraer solo el número con decimales usando Expresión Regular (soporta "6,96" o "9.73")
-      match = re.search(r"\d+[\.,]\d+", texto_limpio)
+    except Exception as e:
+        print(f"      [!] Error BCB: {e}", flush=True)
 
-      if match:
-        valor_texto = match.group(0).replace(",", ".")
-        valor_float = float(valor_texto)
-
-        res = {
-            "venta": round(valor_float + 0.1, 2),
-            "compra": round(valor_float - 0.1, 2),
-            "oficial": valor_float,
-        }
-        print(f"      OK -> BCB: {res}", flush=True)
-        return res
-
-    print(
-        "      [!] No se encontró el elemento con clase 'bcb-tco-num' en el"
-        " HTML.",
-        flush=True,
-    )
-
-  except Exception as e:
-    print(f"      [!] Error BCB: {e}", flush=True)
-
-  return None
+    return None
 
 def obtener_datos_bisa():
-    print("[2/3] Consultando BISA...", flush=True)
+    print("[2/5] Consultando BISA...", flush=True)
     url = "https://www.bisa.com/home"
     try:
         response = requests.get(url, headers=HEADERS, verify=False, timeout=15)
@@ -169,53 +95,105 @@ def obtener_datos_bisa():
     return None
 
 def obtener_datos_bcp():
-    print("[3/3] Consultando BCP (Selenium)...", flush=True)
+    print("[3/5] Consultando BCP (curl_cffi)...", flush=True)
     url = "https://www.bcp.com.bo/"
-    chrome_options = Options()
-    chrome_options.add_argument("--headless")
-    chrome_options.add_argument("--window-size=1920,1080")
-    chrome_options.add_argument("--disable-gpu")
-    chrome_options.add_argument(f'user-agent={HEADERS["User-Agent"]}')
+    headers = {
+        "Host": "www.bcp.com.bo",
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
+        "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8",
+        "Accept-Language": "es-ES,es;q=0.9,en-US;q=0.8,en;q=0.7",
+        "Accept-Encoding": "gzip, deflate, br, zstd",
+        "Connection": "keep-alive",
+        "Upgrade-Insecure-Requests": "1",
+        "Sec-Fetch-Dest": "document",
+        "Sec-Fetch-Mode": "navigate",
+        "Sec-Fetch-Site": "none",
+        "Sec-Fetch-User": "?1",
+    }
 
-    driver = None
     try:
-        service = Service(ChromeDriverManager().install())
-        driver = webdriver.Chrome(service=service, options=chrome_options)
-        driver.get(url)
-        wait = WebDriverWait(driver, 25)
+        response = curl_requests.get(
+            url, 
+            headers=headers, 
+            impersonate="chrome124", 
+            timeout=15
+        )
+        response.raise_for_status()
+        html_content = response.text
 
-        # Intento de cerrar popup
-        try:
-            btn_cerrar = wait.until(EC.element_to_be_clickable((By.CLASS_NAME, "cerrarBtn1")))
-            btn_cerrar.click()
-        except:
-            pass
+        patrones = {
+            "USD_compra": r"Dólar Compra:\s*([\d\.,]+)",
+            "USD_venta": r"Dólar Venta:\s*([\d\.,]+)",
+            "USDT_compra": r"USDT Compra:\s*([\d\.,]+)",
+            "USDT_venta": r"USDT Venta:\s*([\d\.,]+)"
+        }
 
-        # Esperamos a que el contenedor de la marquesina tenga datos
-        wait.until(lambda d: "USDT" in d.find_element(By.CLASS_NAME, "marquee-content").text)
-        contenido = driver.execute_script("return document.querySelector('.marquee-content').innerText;")
-        
-        datos = {"compra": None, "venta": None}
-        partes = contenido.split('|')
-        
-        for parte in partes:
-            # Limpieza genérica del texto y conversión a float
-            if "USDT Compra" in parte:
-                valor = parte.replace("USDT Compra:", "").strip().replace(',', '.')
-                datos["compra"] = float(valor)
-            elif "USDT Venta" in parte:
-                valor = parte.replace("USDT Venta:", "").strip().replace(',', '.')
-                datos["venta"] = float(valor)
+        extraidos = {}
+        for clave, patron in patrones.items():
+            match = re.search(patron, html_content)
+            if match:
+                extraidos[clave] = float(match.group(1).replace(',', '.'))
+            else:
+                extraidos[clave] = None
 
-        if datos["compra"] and datos["venta"]:
-            print(f"      OK -> BCP: Compra {datos['compra']} | Venta {datos['venta']}", flush=True)
-            return datos
-            
+        res_bcp_usdt = {
+            "compra": extraidos.get("USDT_compra"),
+            "venta": extraidos.get("USDT_venta")
+        }
+        res_bcp_usd = {
+            "compra": extraidos.get("USD_compra"),
+            "venta": extraidos.get("USD_venta")
+        }
+
+        print(f"      OK -> BCP USDT: {res_bcp_usdt}", flush=True)
+        print(f"      OK -> BCP USD : {res_bcp_usd}", flush=True)
+
+        return res_bcp_usdt, res_bcp_usd
+
     except Exception as e:
-        print(f"      [!] Error BCP: {str(e)[:50]}...", flush=True)
-    finally:
-        if driver: driver.quit()
-    return None
+        print(f"      [!] Error BCP: {e}", flush=True)
+        return {"compra": None, "venta": None}, {"compra": None, "venta": None}
+
+def obtener_datos_baneco():
+    print("[4/5] Consultando Banco Económico...", flush=True)
+    url = "https://www.baneco.com.bo/gbGLOBALTiposDeCambio"
+    try:
+        response = requests.get(url, headers=HEADERS, verify=False, timeout=15)
+        data = response.json()
+        
+        texto = data.get("gbGLOBALTiposDeCambioResult", "")
+        
+        match_compra = re.search(r"Compra:\s*([\d\.,]+)", texto)
+        match_venta = re.search(r"Venta:\s*([\d\.,]+)", texto)
+        
+        compra = float(match_compra.group(1).replace(',', '.')) if match_compra else None
+        venta = float(match_venta.group(1).replace(',', '.')) if match_venta else None
+        
+        res = {"compra": compra, "venta": venta}
+        print(f"      OK -> BANECO (BEC_USD): {res}", flush=True)
+        return res
+
+    except Exception as e:
+        print(f"      [!] Error Banco Económico: {e}", flush=True)
+        return {"compra": None, "venta": None}
+
+def obtener_datos_bmsc():
+    print("[5/5] Consultando Banco Mercantil Santa Cruz...", flush=True)
+    url = "https://backportal.bmsc.com.bo:1443/api/bmscservices/tipotre"
+    try:
+        response = requests.get(url, headers=HEADERS, verify=False, timeout=15)
+        data = response.json()
+        
+        compra = float(data.get("compra")) if data.get("compra") is not None else None
+        venta = float(data.get("venta")) if data.get("venta") is not None else None
+        
+        res = {"compra": compra, "venta": venta}
+        print(f"      OK -> BMSC (BMSC_USD): {res}", flush=True)
+        return res
+
+    except Exception as e:
+        print(f"      [!] Error Banco Mercantil Santa Cruz: {e}", flush=True)
+        return {"compra": None, "venta": None}
 
 def tarea_principal():
     ahora = datetime.now()
@@ -224,15 +202,20 @@ def tarea_principal():
     # Ejecución de los Scrapers
     res_bcb = obtener_datos_bcb()
     res_bisa = obtener_datos_bisa()
-    res_bcp = obtener_datos_bcp()
+    res_bcp_usdt, res_bcp_usd = obtener_datos_bcp()
+    res_bec_usd = obtener_datos_baneco()
+    res_bmsc_usd = obtener_datos_bmsc()
 
-    # Preparar el documento
+    # Preparar el documento estructurado
     documento = {
         "timestamp": ahora,
         "fuentes": {
             "BCB": res_bcb,
             "BISA": res_bisa,
-            "BCP": res_bcp
+            "BCP_USDT": res_bcp_usdt,
+            "BCP_USD": res_bcp_usd,
+            "BEC_USD": res_bec_usd,
+            "BMSC_USD": res_bmsc_usd
         }
     }
 
