@@ -77,22 +77,28 @@ def obtener_datos_bcb():
 def obtener_datos_bisa():
     print("[2/9] Consultando BISA...", flush=True)
     url = "https://www.bisa.com/home"
+    # Inicializamos con 0.0 por defecto
+    datos = {"compra": 0.0, "venta": 0.0}
     try:
         response = requests.get(url, headers=HEADERS, verify=False, timeout=15)
         soup = BeautifulSoup(response.text, 'html.parser')
         spans = soup.find_all('span')
-        datos = {"compra": None, "venta": None}
+        
         for s in spans:
             texto = s.get_text(strip=True)
             if "USDTs Compra" in texto:
-                datos["compra"] = float(texto.replace("USDTs Compra", "").strip().replace(',', '.'))
+                val = texto.replace("USDTs Compra", "").strip().replace(',', '.')
+                datos["compra"] = float(val) if val else 0.0
             elif "USDTs Venta" in texto:
-                datos["venta"] = float(texto.replace("USDTs Venta", "").strip().replace(',', '.'))
+                val = texto.replace("USDTs Venta", "").strip().replace(',', '.')
+                datos["venta"] = float(val) if val else 0.0
+                
         print(f"      OK -> BISA: {datos}", flush=True)
         return datos
     except Exception as e:
         print(f"      [!] Error BISA: {e}", flush=True)
-    return None
+        # En caso de excepción, retorna el diccionario poblado con 0.0
+        return datos
 
 def obtener_datos_bcp():
     print("[3/9] Consultando BCP (curl_cffi)...", flush=True)
