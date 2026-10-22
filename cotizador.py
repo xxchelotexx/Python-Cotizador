@@ -381,16 +381,33 @@ def obtener_datos_ganadero():
     url = "https://www.bg.com.bo/"
     datos = {"compra": 0.0, "venta": None}
     
+    headers = {
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
+        "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8",
+        "Accept-Language": "es-ES,es;q=0.9,en-US;q=0.8,en;q=0.7",
+        "Accept-Encoding": "gzip, deflate, br, zstd",
+        "Connection": "keep-alive",
+        "Upgrade-Insecure-Requests": "1",
+        "Sec-Fetch-Dest": "document",
+        "Sec-Fetch-Mode": "navigate",
+        "Sec-Fetch-Site": "none",
+        "Sec-Fetch-User": "?1",
+    }
+    
     try:
-        response = requests.get(url, headers=HEADERS, verify=False, timeout=15)
+        response = curl_requests.get(url, headers=headers, impersonate="chrome124", timeout=15)
         response.raise_for_status()
         
-        # Buscar el texto "Valor Ref. Venta USD" seguido del valor en Bs.
-        match = re.search(r"Valor Ref\. Venta USD.*?([\d\.,]+)\s*Bs\.", response.text, re.DOTALL | re.IGNORECASE)
+        soup = BeautifulSoup(response.text, 'html.parser')
+        texto_buscado = soup.find(string=re.compile(r"Valor Ref\. Venta USD", re.IGNORECASE))
         
-        if match:
-            valor_str = match.group(1).replace(',', '.')
-            datos["venta"] = float(valor_str)
+        if texto_buscado:
+            contenedor = texto_buscado.find_parent('div', class_=re.compile(r'flex'))
+            if contenedor:
+                match = re.search(r"([\d\.,]+)\s*Bs\.", contenedor.get_text())
+                if match:
+                    valor_str = match.group(1).replace(',', '.')
+                    datos["venta"] = float(valor_str)
 
         print(f"      OK -> Banco Ganadero (BGA_USD): {datos}", flush=True)
         return datos
@@ -398,12 +415,14 @@ def obtener_datos_ganadero():
     except Exception as e:
         print(f"      [!] Error Banco Ganadero: {e}", flush=True)
         return datos
+
+
     
 def tarea_principal():
     ahora = datetime.now()
     print(f"\n--- INICIO DE CICLO: {ahora.strftime('%H:%M:%S')} ---", flush=True)
     
-    # Ejecución de los Scrapers
+    #Ejecución de los Scrapers
     res_bcb = obtener_datos_bcb()
     res_bisa_usdt, res_bisa_usd = obtener_datos_bisa()  # <--- Desempaquetado duplo
     res_bcp_usdt, res_bcp_usd = obtener_datos_bcp()
