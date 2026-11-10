@@ -379,7 +379,7 @@ def obtener_datos_fortaleza():
 def obtener_datos_ganadero():
     print("[11/11] Consultando Banco Ganadero...", flush=True)
     url = "https://www.bg.com.bo/"
-    datos = {"compra": 0.0, "venta": None}
+    datos = {"compra": 0.0, "venta": 0.0}
     
     headers = {
         "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
@@ -399,21 +399,33 @@ def obtener_datos_ganadero():
         response.raise_for_status()
         
         soup = BeautifulSoup(response.text, 'html.parser')
-        texto_buscado = soup.find(string=re.compile(r"Valor Ref\. Venta USD", re.IGNORECASE))
         
-        if texto_buscado:
-            contenedor = texto_buscado.find_parent('div', class_=re.compile(r'flex'))
-            if contenedor:
-                match = re.search(r"([\d\.,]+)\s*Bs\.", contenedor.get_text())
+        # 1. Extraer T. Cambio Venta
+        texto_venta = soup.find(string=re.compile(r"T\.\s*Cambio\s*Venta", re.IGNORECASE))
+        if texto_venta:
+            # Subimos al contenedor común que agrupa el título y el valor
+            contenedor_venta = texto_venta.find_parent('div', class_=re.compile(r'flex'))
+            if contenedor_venta:
+                match = re.search(r"([\d\.,]+)\s*Bs\.", contenedor_venta.get_text())
                 if match:
-                    valor_str = match.group(1).replace(',', '.')
+                    valor_str = match.group(1).replace('.', '').replace(',', '.') # Limpieza correcta por si hay puntos de miles
                     datos["venta"] = float(valor_str)
 
-        print(f"      OK -> Banco Ganadero (BGA_USD): {datos}", flush=True)
+        # 2. Extraer T. Cambio Compra
+        texto_compra = soup.find(string=re.compile(r"T\.\s*Cambio\s*Compra", re.IGNORECASE))
+        if texto_compra:
+            contenedor_compra = texto_compra.find_parent('div', class_=re.compile(r'flex'))
+            if contenedor_compra:
+                match = re.search(r"([\d\.,]+)\s*Bs\.", contenedor_compra.get_text())
+                if match:
+                    valor_str = match.group(1).replace('.', '').replace(',', '.')
+                    datos["compra"] = float(valor_str)
+
+        print(f"     OK -> Banco Ganadero (BGA_USD): {datos}", flush=True)
         return datos
 
     except Exception as e:
-        print(f"      [!] Error Banco Ganadero: {e}", flush=True)
+        print(f"     [!] Error Banco Ganadero: {e}", flush=True)
         return datos
 
 
